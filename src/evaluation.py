@@ -15,6 +15,7 @@ band macro-F1 (bands from utils.EXPERIENCE_BANDS). Predictions are clipped to
   output/tables/mae_by_{occupation,band,truncated}.csv
   output/tables/fairness_mae.csv, fairness_gaps.csv   MAE by sex / race (evaluation only)
   output/tables/bert_top10_errors.csv    largest BERT errors with diagnosed causes
+  output/tables/screening_decisions.csv  false reject / accept rates of a 'requires >= t years' filter
   output/metrics/final_evaluation.json
 The primary BERT is the BERT run with the lowest VALIDATION MAE (never chosen on test).
 """
@@ -87,6 +88,7 @@ MODELS: tuple[tuple[str, str, str], ...] = (
 )
 N_BOOT = 1000
 CI = 0.95
+DECISION_THRESHOLDS = (2, 5, 10)
 
 
 def load_predictions(model: str, split: str) -> pd.DataFrame:
@@ -309,7 +311,19 @@ def run_final_evaluation() -> None:
     fair.to_csv(TABLES_DIR / "fairness_mae.csv", index=False)
     pd.DataFrame(gaps).to_csv(TABLES_DIR / "fairness_gaps.csv", index=False)
 
-    # 5) top-10 BERT errors with causes
+    # 5) screening decisions "requires >= t years": wrongly rejected / accepted candidates
+    dec = []
+    for t_years in DECISION_THRESHOLDS:
+        qualified = test["exp_year"] >= t_years
+        for m, label, _ in models:
+            accept = clip_target(preds[m]) >= t_years
+            dec.append({"threshold_years": t_years, "model": m, "label": label, "n_qualified": int(qualified.sum()),
+                        "false_reject_rate": float((qualified & ~accept).sum() / max(qualified.sum(), 1)),
+                        "false_accept_rate": float((~qualified & accept).sum() / max((~qualified).sum(), 1)),
+                        "decision_errors": int((qualified != accept).sum())})
+    pd.DataFrame(dec).to_csv(TABLES_DIR / "screening_decisions.csv", index=False)
+
+    # 6) top-10 BERT errors with causes
     top = top_errors(test, bert)
     top.to_csv(TABLES_DIR / "bert_top10_errors.csv", index=False)
     log.info("Top-10 %s errors:\n%s", bert, top[["id", "occupation", "exp_year", "y_pred", "error", "rules_pred",
