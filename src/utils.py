@@ -97,7 +97,8 @@ def ensure_dirs(dirs: Iterable[Path] = _ALL_DIRS) -> None:
 
 
 def set_seed(seed: int = SEED) -> None:
-    """Seed python, numpy and (if installed) torch / paddle for reproducibility."""
+    """Seed python, numpy, torch (if installed) and paddle (only if already imported:
+    importing it costs ~10 s and is not needed outside the OCR step)."""
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
@@ -110,12 +111,8 @@ def set_seed(seed: int = SEED) -> None:
         torch.backends.cudnn.benchmark = False
     except ImportError:
         pass
-    try:
-        import paddle
-
-        paddle.seed(seed)
-    except ImportError:
-        pass
+    if "paddle" in sys.modules:
+        sys.modules["paddle"].seed(seed)
 
 
 def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
