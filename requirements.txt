@@ -1,15 +1,15 @@
-# Python 3.11 (paddlepaddle has no wheels for 3.13+ yet)
-#
-# GPU (CUDA 11.8) — install Paddle and Torch from their own indexes first:
-#   pip install paddlepaddle-gpu==3.0.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu118/
-#   pip install torch==2.7.0 --index-url https://download.pytorch.org/whl/cu118
-# then: pip install -r requirements.txt
-# CPU-only: the pins below are enough.
+﻿# Python 3.11 (paddlepaddle has no wheels for 3.13+ yet). Target: CUDA 11.8 GPU.
+#   pip install -r requirements.txt
+#   (uv: uv pip install -r requirements.txt --index-strategy unsafe-best-match)
+# CPU-only machines: replace `paddlepaddle-gpu==3.3.1` with `paddlepaddle==3.3.1`
+# and `torch==2.7.0+cu118` with `torch==2.7.0`. Never install both paddle variants.
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cu118/
+--extra-index-url https://download.pytorch.org/whl/cu118
 
 # --- OCR ---
-paddlepaddle==3.0.0
-paddleocr==3.0.1
-opencv-python-headless==4.11.0.86
+paddlepaddle-gpu==3.3.1
+paddleocr==3.7.0
+opencv-contrib-python==4.10.0.84   # same build PaddleX pins; do not add a 2nd OpenCV package
 PyMuPDF==1.25.5            # PDF -> image for the Streamlit uploader
 
 # --- Data ---
@@ -21,7 +21,7 @@ pyarrow==20.0.0
 Pillow==11.2.1
 
 # --- Models ---
-torch==2.7.0
+torch==2.7.0+cu118
 transformers==4.51.3
 accelerate==1.7.0
 sentence-transformers==4.1.0
