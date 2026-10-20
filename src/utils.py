@@ -2,6 +2,10 @@
 
 Every other module imports its configuration from here so that paths, the
 target cap and the experience bands are defined in exactly one place.
+
+Windows note: in any process that uses both frameworks, import ``torch`` BEFORE
+``paddle``. Paddle loads its own CUDA/cuDNN DLLs and a later ``import torch``
+fails with ``WinError 127`` (shm.dll).
 """
 from __future__ import annotations
 
@@ -25,6 +29,9 @@ DATA_DIR = ROOT_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 RAW_IMAGES_DIR = RAW_DIR / "images"
 RAW_METADATA_PATH = RAW_DIR / "metadata.parquet"   # ids, targets, reference text
+RAW_PII_PATH = RAW_DIR / "pii.parquet"              # names/state/age: PII scrubbing only, never features
+RAW_INDEX_PATH = RAW_DIR / "shard_index.parquet"    # (id, has_photo) -> shard / row group
+TARGET_CAP_PATH = RAW_DIR / "target_cap.json"       # global cap decision (see download_data.py)
 OCR_DIR = DATA_DIR / "ocr"                          # one JSON per CV (cache)
 PROCESSED_DIR = DATA_DIR / "processed"
 SPLITS_DIR = DATA_DIR / "splits"
@@ -58,20 +65,22 @@ SAMPLES_PER_OCCUPATION = 800
 
 TARGET_COL = "exp_year"
 TARGET_MIN = 0
-TARGET_MAX = 20            # may be revised once in download_data.py if >15% sit at the cap
+TARGET_MAX = 20            # default cap; download_data.py may revise it once (see get_target_cap)
 CAP_SHARE_THRESHOLD = 0.15
+CAP_CANDIDATES = (20, 25, 30, 35, 40)
 
 # Features that must never reach a model (sex/race only for the fairness check, Q4)
 FORBIDDEN_FEATURES = ("age", "sex", "race", "name", "state", "region")
 FAIRNESS_ONLY_COLS = ("sex", "race")
 
-# Experience bands: (label, lower inclusive, upper inclusive)
+# Experience bands: (label, lower inclusive, upper inclusive). The last band is open-ended
+# so the bands stay valid if the global cap is raised above 20.
 EXPERIENCE_BANDS: tuple[tuple[str, int, int], ...] = (
     ("0-2", 0, 2),
     ("3-5", 3, 5),
     ("6-10", 6, 10),
     ("11-15", 11, 15),
-    ("16-20", 16, 20),
+    ("16+", 16, 10**6),
 )
 BAND_LABELS = tuple(b[0] for b in EXPERIENCE_BANDS)
 
@@ -123,14 +132,24 @@ def get_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     return logger
 
 
-def clip_target(y: Any, cap: int = TARGET_MAX) -> np.ndarray:
-    """Clip experience years to [TARGET_MIN, cap]."""
-    return np.clip(np.asarray(y, dtype=float), TARGET_MIN, cap)
+def get_target_cap() -> int:
+    """Global target cap: the decision persisted by download_data.py, else TARGET_MAX.
+
+    Every module must use this (never a literal 20) so the cap is identical everywhere.
+    """
+    if TARGET_CAP_PATH.exists():
+        return int(load_json(TARGET_CAP_PATH)["cap"])
+    return TARGET_MAX
+
+
+def clip_target(y: Any, cap: int | None = None) -> np.ndarray:
+    """Clip experience years to [TARGET_MIN, cap] (cap defaults to the global decision)."""
+    return np.clip(np.asarray(y, dtype=float), TARGET_MIN, get_target_cap() if cap is None else cap)
 
 
 def to_band(years: float) -> str:
     """Map a (possibly fractional) number of years to its experience band label."""
-    y = int(round(float(np.clip(years, TARGET_MIN, EXPERIENCE_BANDS[-1][2]))))
+    y = int(round(max(float(years), TARGET_MIN)))
     for label, lo, hi in EXPERIENCE_BANDS:
         if lo <= y <= hi:
             return label
@@ -194,6 +213,16 @@ def hardware_info() -> dict[str, Any]:
     except ImportError:
         pass
     return info
+
+
+def load_dotenv_if_present() -> None:
+    """Load ROOT/.env (e.g. HF_TOKEN) into the environment without overriding existing vars."""
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv(ROOT_DIR / ".env", override=False)
+    except ImportError:
+        pass
 
 
 def get_device() -> str:
