@@ -209,22 +209,24 @@ def probe_figure() -> None:
         return
     p = pd.read_csv(path)
     models = [m for m in SHORT if m in set(p["model"])]
-    titles = {"shift_all_+5": "P1  every year +5  (ideal change 0)",
-              "oldest_start_-5": "P2  oldest job starts 5 y earlier  (ideal change ~ +5)",
-              "dates_removed": "P3  all date ranges removed  (|change|)"}
-    fig, axes = plt.subplots(1, 3, figsize=(15, 0.5 * len(models) + 2), sharey=True)
+    titles = {"shift_all_+5": "P1  all years +5 (ideal 0)",
+              "shift_all_-3": "P1b  all years -3 (ideal 0)",
+              "oldest_start_-5": "P2  oldest start -5 y (ideal ~+5)",
+              "dates_removed": "P3  dates removed (|change|)"}
+    titles = {k: v for k, v in titles.items() if k in set(p["probe"])}
+    fig, axes = plt.subplots(1, len(titles), figsize=(5 * len(titles), 0.5 * len(models) + 2), sharey=True)
     for ax, (probe, title) in zip(axes, titles.items()):
         d = p[p["probe"] == probe].set_index("model").loc[models]
-        val = d["mean_abs_delta"] if probe != "oldest_start_-5" else d["mean_delta"]
-        ideal = 0 if probe == "shift_all_+5" else d["expected_mean_delta"].iloc[0] if probe == "oldest_start_-5" else None
+        val = d["mean_abs_delta"] if probe == "dates_removed" else d["mean_delta"]
+        ideal = d["expected_mean_delta"].iloc[0] if probe == "oldest_start_-5" else None if probe == "dates_removed" else 0
         if ideal is not None:
             ax.axvline(ideal, color=REF_LINE, ls="--", lw=1.2)
         ax.hlines(range(len(models)), 0, val, color=GRID, lw=2)
         ax.scatter(val, range(len(models)), s=48, color=BLUE, zorder=3, edgecolors=SURFACE, linewidths=2)
         for i, v in enumerate(val):
-            ax.text(v, i + 0.2, f" {v:+.2f}" if probe == "oldest_start_-5" else f" {v:.2f}", fontsize=8.5, color=TEXT_2)
+            ax.text(v, i + 0.2, f" {v:.2f}" if probe == "dates_removed" else f" {v:+.2f}", fontsize=8.5, color=TEXT_2)
         ax.set_title(title, fontsize=10)
-        ax.set_xlabel("mean change in prediction (years)")
+        ax.set_xlabel("mean |change| (years)" if probe == "dates_removed" else "mean change in prediction (years)")
         ax.margins(x=0.2)
     axes[0].set_yticks(range(len(models)), [SHORT[m] for m in models])
     fig.suptitle("Q1 counterfactual date probes on the test set", x=0.01, ha="left", color=TEXT, fontsize=12)
@@ -240,13 +242,21 @@ def noise_figure() -> None:
     fig, axes = plt.subplots(1, 2, figsize=(13, 4.2), sharey=True)
     for ax, kind in zip(axes, ("digits", "chars")):
         d = n[n["noise"] == kind]
+        ends = []
         for slot, m in enumerate(keep):
             s = d[d["model"] == m].sort_values("rate")
             ax.plot(100 * s["rate"], s["mae"], color=SERIES[slot], lw=2, marker="o", ms=5, markeredgecolor=SURFACE)
-            ax.text(100 * s["rate"].iloc[-1], s["mae"].iloc[-1], f"  {SHORT[m]}", color=TEXT, fontsize=8.5, va="center")
+            ends.append([s["mae"].iloc[-1], SHORT[m], 100 * s["rate"].iloc[-1]])
+        # direct labels with a minimum vertical separation so they never collide
+        ends.sort()
+        gap = 0.06 * (d["mae"].max() - d["mae"].min() + 1e-9)
+        for i in range(1, len(ends)):
+            ends[i][0] = max(ends[i][0], ends[i - 1][0] + gap)
+        for y, label, x in ends:
+            ax.text(x, y, f"  {label}", color=TEXT, fontsize=8.5, va="center")
         ax.set_xlabel("substitution rate (% of " + ("digits" if kind == "digits" else "alphanumeric chars") + ")")
         ax.set_title("Synthetic " + ("digit" if kind == "digits" else "character") + " noise")
-        ax.margins(x=0.25)
+        ax.set_xlim(0, 100 * d["rate"].max() * 1.35)
     axes[0].set_ylabel("Test MAE (years)")
     axes[0].legend([plt.Line2D([], [], color=SERIES[i], lw=2) for i in range(len(keep))], [SHORT[m] for m in keep],
                    loc="upper left", fontsize=8.5)

@@ -5,7 +5,10 @@ Q1  What does BERT learn that the baselines cannot?  -> counterfactual date prob
                        the ideal prediction change is 0.
     P2 oldest_start_-5 the oldest job starts 5 years earlier: the true sum of spans grows
                        by 5 (clipped at the cap) - the ideal change is +5.
+    P1b shift_all_-3   every year -3: same as P1 but staying inside the train year range
+                       (1999-2023), so a change cannot be blamed on unseen year tokens.
     P3 dates_removed   every date range deleted: how much does each model rely on dates?
+    Probes are also broken down by number of jobs in the CV (q1_probes_by_njobs.csv).
 Q2  How much does OCR noise cost?
     (a) the OCR-trained models applied to the REFERENCE text of the same test CVs,
     (b) models trained and tested on reference text (TF-IDF refit here, DistilBERT via
@@ -65,27 +68,38 @@ def remove_dates(text: str) -> str:
     return DATE_RANGE_RE.sub("", text)
 
 
-def run_probes(test: pd.DataFrame, predictors: dict) -> pd.DataFrame:
+def run_probes(test: pd.DataFrame, predictors: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     cap = get_target_cap()
     texts = test["text"].tolist()
     expected_p2 = np.clip(test["exp_year"] + 5, 0, cap) - test["exp_year"]
     probes = {"shift_all_+5": [shift_all_years(t) for t in texts],
+              "shift_all_-3": [shift_all_years(t, -3) for t in texts],
               "oldest_start_-5": [oldest_start_earlier(t) for t in texts],
               "dates_removed": [remove_dates(t) for t in texts]}
-    rows = []
+    from src.preprocessing import date_ranges
+
+    n_jobs = np.array([len(date_ranges(t)) for t in texts])
+    rows, by_jobs = [], []
     for name, predict in predictors.items():
         base = predict(texts)
         for probe, mod in probes.items():
             delta = predict(mod) - base
+            for k in np.unique(n_jobs):
+                sel = n_jobs == k
+                by_jobs.append({"model": name, "probe": probe, "n_jobs": int(k), "n": int(sel.sum()),
+                                "mean_delta": float(delta[sel].mean()),
+                                "ideal": float(expected_p2[sel].mean()) if probe == "oldest_start_-5" else 0.0})
             expected = expected_p2.values if probe == "oldest_start_-5" else np.zeros(len(base))
             rows.append({"model": name, "label": LABELS.get(name, name), "probe": probe,
                          "mean_delta": float(delta.mean()), "mean_abs_delta": float(np.abs(delta).mean()),
                          "expected_mean_delta": float(expected.mean()) if probe != "dates_removed" else np.nan,
                          "mae_vs_expected": float(np.abs(delta - expected).mean()) if probe != "dates_removed" else np.nan,
                          "response_ratio": float(delta.mean() / expected.mean()) if probe == "oldest_start_-5" else np.nan})
-        log.info("[probe] %-30s P1 |d|=%.3f  P2 d=%.3f (ideal %.3f)  P3 |d|=%.3f", name,
-                 rows[-3]["mean_abs_delta"], rows[-2]["mean_delta"], rows[-2]["expected_mean_delta"], rows[-1]["mean_abs_delta"])
-    return pd.DataFrame(rows)
+        r = {x["probe"]: x for x in rows[-len(probes):]}
+        log.info("[probe] %-30s P1 d=%+.3f  P1b d=%+.3f  P2 d=%+.3f (ideal %.3f)  P3 |d|=%.3f", name,
+                 r["shift_all_+5"]["mean_delta"], r["shift_all_-3"]["mean_delta"], r["oldest_start_-5"]["mean_delta"],
+                 r["oldest_start_-5"]["expected_mean_delta"], r["dates_removed"]["mean_abs_delta"])
+    return pd.DataFrame(rows), pd.DataFrame(by_jobs)
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +240,9 @@ def main() -> None:
     predictors = load_all()
     log.info("Loaded predictors: %s", list(predictors))
 
-    probes = run_probes(test, predictors)
+    probes, probes_jobs = run_probes(test, predictors)
     probes.to_csv(TABLES_DIR / "q1_probes.csv", index=False)
+    probes_jobs.to_csv(TABLES_DIR / "q1_probes_by_njobs.csv", index=False)
     q2 = run_ocr_vs_ref(test, predictors)
     q2.to_csv(TABLES_DIR / "q2_ocr_vs_ref.csv", index=False)
     noise = None if args.skip_noise else run_noise_curve(test, predictors)
